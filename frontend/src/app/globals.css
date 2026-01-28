@@ -1,0 +1,75 @@
+@import "tailwindcss";
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.maplibregl-popup-content {
+  color: #111;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.maplibregl-popup-content b,
+.maplibregl-popup-content strong {
+  color: #000;
+  font-weight: 700;
+}
+
+/* Optional: only for our custom popup */
+.buildings-popup .maplibregl-popup-content {
+  color: #111;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.buildings-popup .maplibregl-popup-content b,
+.buildings-popup .maplibregl-popup-content strong {
+  color: #000;
+  font-weight: 700;
+}
+
+.buildings-popup .popup-root .header {
+  font-weight: 700;
+  color: #000;
+  margin-bottom: 4px;
+}
+
+.buildings-popup .popup-root .muted {
+  opacity: 0.85;
+}
+
+.buildings-popup .popup-root .divider {
+  height: 1px;
+  margin: 8px 0;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.buildings-popup .popup-root .section .title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}

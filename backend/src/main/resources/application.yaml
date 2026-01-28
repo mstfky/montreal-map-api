@@ -1,0 +1,29 @@
+server:
+  port: 8080
+
+spring:
+  datasource:
+    hikari:
+      initializationFailTimeout: 0
+      connectionTimeout: 30000
+      validationTimeout: 5000
+    url: jdbc:postgresql://postgis:5432/montreal
+    username: montreal
+    password: montreal
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+logging:
+  level:
+    org.hibernate.SQL: info
+    org.hibernate.orm.jdbc.bind: trace

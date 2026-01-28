@@ -1,0 +1,21 @@
+# Claude Code files
+.claude/
+.claudeignore
+CLAUDE.md
+*.claude.md
+.claude-*
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+postgis_data/
+
+# Build artifacts (root level)
+/target/
