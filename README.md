@@ -33,10 +33,12 @@ Full-stack geospatial web application for visualizing and searching Montreal bui
 # Start all services (PostgreSQL, API, Frontend)
 docker-compose up -d
 
-# Populate database with sample data
-docker exec montreal-postgis sh -c "psql -U montreal -d montreal -f /db/raw/raw_zonage.sql"
-docker exec montreal-postgis sh -c "psql -U montreal -d montreal -f /db/populate/populate_zonage.sql"
-docker exec montreal-postgis sh -c "psql -U montreal -d montreal -f /db/populate/populate_buildings.sql"
+# Populate database with sample data (single command)
+# Linux/Mac:
+./scripts/populate-db.sh
+
+# Windows:
+scripts\populate-db.cmd
 ```
 
 ### Access the Application
