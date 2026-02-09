@@ -48,10 +48,20 @@ public class ZonageServiceImpl implements ZonageService {
         props.put("arrondissement", z.getArrondissement());
         props.put("district", z.getDistrict());
         props.put("secteur", z.getSecteur());
+        props.put("classe1", z.getClasse1());
+        props.put("classe2", z.getClasse2());
+        props.put("classe3", z.getClasse3());
+        props.put("classe4", z.getClasse4());
+        props.put("classe5", z.getClasse5());
+        props.put("classe6", z.getClasse6());
         props.put("etageMin", z.getEtageMin());
         props.put("etageMax", z.getEtageMax());
         props.put("densiteMin", z.getDensiteMin());
         props.put("densiteMax", z.getDensiteMax());
+        props.put("tauxMin", z.getTauxMin());
+        props.put("tauxMax", z.getTauxMax());
+        props.put("note", z.getNote());
+        props.put("info", z.getInfo());
 
         return GeoJson.Feature.of(String.valueOf(z.getId()), geometry, props);
     }
@@ -85,6 +95,11 @@ public class ZonageServiceImpl implements ZonageService {
             out.add(List.of(c.getX(), c.getY()));
         }
         return out;
+    }
+
+    @Override
+    public List<String> getArrondissements() {
+        return zonageRepository.findDistinctArrondissements();
     }
 
     private ZonageResponse toDto(Zonage z) {

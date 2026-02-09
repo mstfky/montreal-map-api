@@ -1,8 +1,8 @@
-package com.teksi.montrealmap.zonage.controller;
+package com.teksi.montrealmap.landuse.controller;
 
 import com.teksi.montrealmap.geojson.GeoJson;
-import com.teksi.montrealmap.zonage.dto.ZonageResponse;
-import com.teksi.montrealmap.zonage.service.ZonageService;
+import com.teksi.montrealmap.landuse.dto.LandUseResponse;
+import com.teksi.montrealmap.landuse.service.LandUseService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -10,17 +10,17 @@ import java.util.List;
 
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/api/zonage")
-public class ZonageController {
+@RequestMapping("/api/land-use")
+public class LandUseController {
 
-    private final ZonageService zonageService;
+    private final LandUseService landUseService;
 
     @GetMapping("/at-point")
-    public ZonageResponse getAtPoint(
+    public List<LandUseResponse> getAtPoint(
             @RequestParam double lng,
             @RequestParam double lat
     ) {
-        return zonageService.getAtPoint(lng, lat);
+        return landUseService.getAtPoint(lng, lat);
     }
 
     @GetMapping("/search/geojson")
@@ -30,11 +30,6 @@ public class ZonageController {
             @RequestParam double maxLng,
             @RequestParam double maxLat
     ) {
-        return zonageService.searchGeoJson(minLng, minLat, maxLng, maxLat);
-    }
-
-    @GetMapping("/arrondissements")
-    public List<String> getArrondissements() {
-        return zonageService.getArrondissements();
+        return landUseService.searchGeoJson(minLng, minLat, maxLng, maxLat);
     }
 }

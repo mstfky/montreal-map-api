@@ -3,12 +3,17 @@ package com.teksi.montrealmap.building.service;
 import com.teksi.montrealmap.building.controller.BuildingSearchRequest;
 import com.teksi.montrealmap.building.dto.BuildingDetailsResponse;
 import com.teksi.montrealmap.building.entity.Building;
+import com.teksi.montrealmap.building.entity.MontrealBuilding;
+import com.teksi.montrealmap.building.entity.PropertyAssessment;
 import com.teksi.montrealmap.building.repository.BuildingRepository;
+import com.teksi.montrealmap.building.repository.MontrealBuildingRepository;
+import com.teksi.montrealmap.building.repository.PropertyAssessmentRepository;
 import com.teksi.montrealmap.geojson.GeoJson;
 import lombok.RequiredArgsConstructor;
 import org.locationtech.jts.geom.Coordinate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +24,8 @@ import java.util.Optional;
 public class BuildingServiceImpl implements BuildingService {
 
     private final BuildingRepository buildingRepository;
+    private final MontrealBuildingRepository montrealBuildingRepository;
+    private final PropertyAssessmentRepository propertyAssessmentRepository;
 
     @Override
     public BuildingDetailsResponse getBuilding(String id) {
@@ -122,19 +129,61 @@ public class BuildingServiceImpl implements BuildingService {
 
     @Override
     public GeoJson.FeatureCollection searchGeoJsonPolygons(BuildingSearchRequest req) {
-        List<Building> buildings = buildingRepository.searchPolygonsInBbox(
-                req.minLng(), req.minLat(), req.maxLng(), req.maxLat(),
-                req.neighborhood(),
-                req.buildingType(),
-                req.minYearBuilt(), req.maxYearBuilt(),
-                req.minFloors(), req.maxFloors()
-        );
+        // Get property assessment data (has year, floors, address, type)
+        List<String> arrondissements = req.arrondissements();
+        boolean hasArrondissements = arrondissements != null && !arrondissements.isEmpty();
 
-        List<GeoJson.Feature> features = buildings.stream()
-                .map(this::toGeoFeatureFromGeom)
+        List<PropertyAssessment> properties = hasArrondissements
+                ? propertyAssessmentRepository.searchInBboxByArrondissements(
+                        req.minLng(), req.minLat(), req.maxLng(), req.maxLat(),
+                        req.minYearBuilt(), req.maxYearBuilt(),
+                        req.minFloors(), req.maxFloors(),
+                        arrondissements)
+                : propertyAssessmentRepository.searchInBbox(
+                        req.minLng(), req.minLat(), req.maxLng(), req.maxLat(),
+                        req.minYearBuilt(), req.maxYearBuilt(),
+                        req.minFloors(), req.maxFloors());
+
+        // Convert to GeoJSON features
+        List<GeoJson.Feature> features = properties.stream()
+                .map(this::toGeoFeatureFromProperty)
                 .toList();
 
         return GeoJson.FeatureCollection.of(features);
+    }
+
+    private GeoJson.Feature toGeoFeatureFromProperty(PropertyAssessment p) {
+        GeoJson.Geometry geometry = toGeoJsonGeometry(p.getGeom());
+
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("address", p.getFullAddress());
+        props.put("neighborhood", p.getBorough());
+        props.put("yearBuilt", p.getYearBuilt());
+        props.put("floors", p.getFloors());
+        props.put("buildingType", p.getUsageLabel());
+        props.put("numUnits", p.getNumUnits());
+        props.put("category", p.getCategory());
+        props.put("landArea", p.getLandArea());
+        props.put("buildingArea", p.getBuildingArea());
+        props.put("source", "Montreal Property Assessment");
+
+        return GeoJson.Feature.of("prop-" + p.getId(), geometry, props);
+    }
+
+    private GeoJson.Feature toGeoFeatureFromMontrealBuilding(MontrealBuilding b) {
+        GeoJson.Geometry geometry = toGeoJsonGeometry(b.getGeom());
+
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("address", null);
+        props.put("neighborhood", null);
+        props.put("yearBuilt", null);
+        props.put("floors", null);
+        props.put("buildingType", "Montreal Building");
+        props.put("superficie", b.getSuperficie());
+        props.put("source", "Montreal Open Data");
+        props.put("updateDate", b.getUpdateDate());
+
+        return GeoJson.Feature.of("mtl-" + b.getId(), geometry, props);
     }
 
     private java.util.Optional<GeoJson.Feature> toGeoFeatureFull(Building b) {

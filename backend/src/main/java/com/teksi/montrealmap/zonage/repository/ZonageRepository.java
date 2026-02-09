@@ -35,5 +35,14 @@ public interface ZonageRepository extends JpaRepository<Zonage, Long> {
             @Param("maxLng") double maxLng,
             @Param("maxLat") double maxLat
     );
+
+    @Query(value = """
+        SELECT DISTINCT z.arrondissement
+        FROM public.zonage z
+        WHERE z.arrondissement IS NOT NULL
+        ORDER BY z.arrondissement
+        """, nativeQuery = true)
+    List<String> findDistinctArrondissements();
+
 }
 

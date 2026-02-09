@@ -31,13 +31,15 @@ public class BuildingController {
             @RequestParam(required = false) Integer minYearBuilt,
             @RequestParam(required = false) Integer maxYearBuilt,
             @RequestParam(required = false) Integer minFloors,
-            @RequestParam(required = false) Integer maxFloors
+            @RequestParam(required = false) Integer maxFloors,
+            @RequestParam(required = false) List<String> arrondissements
     ) {
         return buildingService.search(new BuildingSearchRequest(
                 minLng, minLat, maxLng, maxLat,
                 neighborhood, buildingType,
                 minYearBuilt, maxYearBuilt,
-                minFloors, maxFloors
+                minFloors, maxFloors,
+                arrondissements
         ));
     }
 
@@ -52,13 +54,15 @@ public class BuildingController {
             @RequestParam(required = false) Integer minYearBuilt,
             @RequestParam(required = false) Integer maxYearBuilt,
             @RequestParam(required = false) Integer minFloors,
-            @RequestParam(required = false) Integer maxFloors
+            @RequestParam(required = false) Integer maxFloors,
+            @RequestParam(required = false) List<String> arrondissements
     ) {
         return buildingService.searchGeoJson(new BuildingSearchRequest(
                 minLng, minLat, maxLng, maxLat,
                 neighborhood, buildingType,
                 minYearBuilt, maxYearBuilt,
-                minFloors, maxFloors
+                minFloors, maxFloors,
+                arrondissements
         ));
     }
 
@@ -73,13 +77,15 @@ public class BuildingController {
             @RequestParam(required = false) Integer minYearBuilt,
             @RequestParam(required = false) Integer maxYearBuilt,
             @RequestParam(required = false) Integer minFloors,
-            @RequestParam(required = false) Integer maxFloors
+            @RequestParam(required = false) Integer maxFloors,
+            @RequestParam(required = false) List<String> arrondissements
     ) {
         return buildingService.searchGeoJsonFull(new BuildingSearchRequest(
                 minLng, minLat, maxLng, maxLat,
                 neighborhood, buildingType,
                 minYearBuilt, maxYearBuilt,
-                minFloors, maxFloors
+                minFloors, maxFloors,
+                arrondissements
         ));
     }
 
@@ -94,13 +100,15 @@ public class BuildingController {
             @RequestParam(required = false) Integer minYearBuilt,
             @RequestParam(required = false) Integer maxYearBuilt,
             @RequestParam(required = false) Integer minFloors,
-            @RequestParam(required = false) Integer maxFloors
+            @RequestParam(required = false) Integer maxFloors,
+            @RequestParam(required = false) List<String> arrondissements
     ) {
         return buildingService.searchGeoJsonPolygons(new BuildingSearchRequest(
                 minLng, minLat, maxLng, maxLat,
                 neighborhood, buildingType,
                 minYearBuilt, maxYearBuilt,
-                minFloors, maxFloors
+                minFloors, maxFloors,
+                arrondissements
         ));
     }
 

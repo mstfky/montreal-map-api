@@ -24,6 +24,7 @@ export type SearchParams = {
     maxYearBuilt?: number;
     minFloors?: number;
     maxFloors?: number;
+    arrondissements?: string[];
 };
 
 function toQuery(params: SearchParams) {
@@ -39,6 +40,9 @@ function toQuery(params: SearchParams) {
     if (params.maxYearBuilt != null) sp.set("maxYearBuilt", String(params.maxYearBuilt));
     if (params.minFloors != null) sp.set("minFloors", String(params.minFloors));
     if (params.maxFloors != null) sp.set("maxFloors", String(params.maxFloors));
+    if (params.arrondissements) {
+        params.arrondissements.forEach((a) => sp.append("arrondissements", a));
+    }
     return sp.toString();
 }
 
@@ -88,12 +92,43 @@ export async function fetchZonageAtPoint(
     return res.json();
 }
 
-
+export async function fetchArrondissements(): Promise<string[]> {
+    const base = process.env.NEXT_PUBLIC_API_BASE!;
+    const res = await fetch(`${base}/api/zonage/arrondissements`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`Arrondissements fetch failed: ${res.status}`);
+    return res.json();
+}
 
 export async function fetchZonesGeoJson(params: SearchParams): Promise<FeatureCollection> {
     const base = process.env.NEXT_PUBLIC_API_BASE!;
     const qs = toQuery(params);
     const res = await fetch(`${base}/api/zonage/search/geojson?${qs}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`Zones API error: ${res.status}`);
+    return res.json();
+}
+
+export type BboxParams = {
+    minLng: number;
+    minLat: number;
+    maxLng: number;
+    maxLat: number;
+};
+
+export async function fetchLandUseGeoJson(params: BboxParams): Promise<FeatureCollection> {
+    const base = process.env.NEXT_PUBLIC_API_BASE!;
+    const sp = new URLSearchParams();
+    sp.set("minLng", String(params.minLng));
+    sp.set("minLat", String(params.minLat));
+    sp.set("maxLng", String(params.maxLng));
+    sp.set("maxLat", String(params.maxLat));
+    const res = await fetch(`${base}/api/land-use/search/geojson?${sp.toString()}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`Land Use API error: ${res.status}`);
+    return res.json();
+}
+
+export async function fetchAdminBoundariesGeoJson(): Promise<FeatureCollection> {
+    const base = process.env.NEXT_PUBLIC_API_BASE!;
+    const res = await fetch(`${base}/api/admin-boundaries/all/geojson`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`Admin Boundaries API error: ${res.status}`);
     return res.json();
 }
