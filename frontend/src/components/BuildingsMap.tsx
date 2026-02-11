@@ -9,10 +9,11 @@ import {
     FeatureCollection,
     SearchParams,
     fetchZonesGeoJson,
-    fetchLandUseGeoJson,
     fetchAdminBoundariesGeoJson,
     fetchZonageAtPoint,
-    fetchArrondissements,
+    fetchArrondissementRefs,
+    fetchZoneCodesByArrondissement,
+    ArrondissementRef,
     ZonageResponse,
 } from "@/lib/api";
 import type { SidebarSelection } from "./sidebar/types";
@@ -26,10 +27,6 @@ const ZONE_SOURCE_ID = "zones";
 const ZONE_LAYER_FILL = "zones-fill";
 const ZONE_LAYER_LINE = "zones-line";
 
-const LANDUSE_SOURCE_ID = "landuse";
-const LANDUSE_LAYER_FILL = "landuse-fill";
-const LANDUSE_LAYER_LINE = "landuse-line";
-
 const HIGHLIGHT_SOURCE_ID = "highlight";
 const HIGHLIGHT_LAYER_LINE = "highlight-line";
 
@@ -37,56 +34,33 @@ const ADMIN_SOURCE_ID = "admin-boundaries";
 const ADMIN_LAYER_LINE = "admin-boundaries-line";
 const ADMIN_LAYER_LABEL = "admin-boundaries-label";
 
-// Feature flags — set to true to re-enable these layers
-const ENABLE_LAND_USE_LAYER = false;
-const ENABLE_ADMIN_BOUNDARIES_LAYER = false;
+type MapStyle = "positron" | "hybrid" | "streets";
 
-// Land use colors by type
-const LANDUSE_COLORS: Record<string, string> = {
-    "Residential": "#90EE90",        // light green
-    "Mixed Use": "#FFB347",          // orange
-    "Industrial": "#B19CD9",         // purple
-    "Parks & Recreation": "#32CD32", // lime green
-    "Conservation": "#228B22",       // forest green
-    "Downtown Core": "#FF6B6B",      // coral red
-    "Public Infrastructure": "#87CEEB", // sky blue
-    "Agricultural": "#F4A460",       // sandy brown
-};
-
-type Filters = {
-    neighborhood?: string;
-    buildingType?: string;
-    minYearBuilt?: number;
-    maxYearBuilt?: number;
-    minFloors?: number;
-    maxFloors?: number;
+const STYLE_URLS: Record<MapStyle, string> = {
+    positron: "https://api.maptiler.com/maps/positron/style.json?key=tB2L6SKHHpGhLq5rCbBD",
+    hybrid: "https://api.maptiler.com/maps/hybrid/style.json?key=tB2L6SKHHpGhLq5rCbBD",
+    streets: "https://api.maptiler.com/maps/streets-v2/style.json?key=tB2L6SKHHpGhLq5rCbBD",
 };
 
 function round(n: number) {
     return Math.round(n * 1e6) / 1e6;
 }
 
+const BUILDINGS_ZOOM_THRESHOLD = 14;
+const EMPTY_FC: FeatureCollection = { type: "FeatureCollection", features: [] };
+
 export default function BuildingsMap() {
     const mapRef = useRef<maplibregl.Map | null>(null);
     const mapDivRef = useRef<HTMLDivElement | null>(null);
     const mapReadyRef = useRef(false);
+    const fetchIdRef = useRef(0);
 
-    const [fc, setFc] = useState<FeatureCollection>({ type: "FeatureCollection", features: [] });
-    const [zonesFc, setZonesFc] = useState<FeatureCollection>({
-        type: "FeatureCollection",
-        features: [],
-    });
-    const [landUseFc, setLandUseFc] = useState<FeatureCollection>({
-        type: "FeatureCollection",
-        features: [],
-    });
-    const [adminFc, setAdminFc] = useState<FeatureCollection>({
-        type: "FeatureCollection",
-        features: [],
-    });
+    // GeoJSON data
+    const [fc, setFc] = useState<FeatureCollection>(EMPTY_FC);
+    const [zonesFc, setZonesFc] = useState<FeatureCollection>(EMPTY_FC);
+    const [adminBoundariesFc, setAdminBoundariesFc] = useState<FeatureCollection>(EMPTY_FC);
 
     const [error, setError] = useState<string | null>(null);
-    const [filters, setFilters] = useState<Filters>({});
     const [loading, setLoading] = useState(false);
     const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
 
@@ -96,18 +70,23 @@ export default function BuildingsMap() {
     const [zonageLoading, setZonageLoading] = useState(false);
     const [zonageError, setZonageError] = useState<string | null>(null);
 
-    // Layer visibility toggles
-    const [showLandUse, setShowLandUse] = useState(ENABLE_LAND_USE_LAYER);
-    const [showZonage, setShowZonage] = useState(true);
-    const [showBuildings, setShowBuildings] = useState(true);
-    const [showAdminBoundaries, setShowAdminBoundaries] = useState(ENABLE_ADMIN_BOUNDARIES_LAYER);
-
-    // Arrondissement filter state
-    const [availableArrondissements, setAvailableArrondissements] = useState<string[]>([]);
-    const [selectedArrondissements, setSelectedArrondissements] = useState<string[]>([]);
+    // --- New panel state ---
+    const [arrondissementRefs, setArrondissementRefs] = useState<ArrondissementRef[]>([]);
+    const [selectedArrondissement, setSelectedArrondissement] = useState<ArrondissementRef | null>(null);
+    const [zoneCodes, setZoneCodes] = useState<string[]>([]);
+    const [selectedZoneCode, setSelectedZoneCode] = useState<string | null>(null);
+    const [mapStyle, setMapStyle] = useState<MapStyle>("positron");
 
     // Initial view: Montreal
     const initial = useMemo(() => ({ lng: -73.5673, lat: 45.5017, zoom: 12 }), []);
+
+    // Refs to hold current GeoJSON data for re-adding after style change
+    const fcRef = useRef<FeatureCollection>(EMPTY_FC);
+    const zonesFcRef = useRef<FeatureCollection>(EMPTY_FC);
+    const adminFcRef = useRef<FeatureCollection>(EMPTY_FC);
+
+    // Keep refs in sync with displayed (filtered) data for style-change re-add
+    useEffect(() => { fcRef.current = fc; }, [fc]);
 
     const closeSidebar = useCallback(() => {
         setSidebarSelection(null);
@@ -126,7 +105,6 @@ export default function BuildingsMap() {
 
     const retryZonage = useCallback(() => {
         if (!sidebarSelection || sidebarSelection.type !== "building") return;
-        // Trigger re-fetch by creating a new selection object
         setSidebarSelection({ ...sidebarSelection });
     }, [sidebarSelection]);
 
@@ -165,13 +143,95 @@ export default function BuildingsMap() {
         };
     }, [sidebarSelection]);
 
+    // =====================================================
+    // Add all sources and layers to a map instance.
+    // Called on initial load and after style changes.
+    // =====================================================
+    function addAllSourcesAndLayers(map: maplibregl.Map) {
+        // --- BUILDINGS ---
+        map.addSource(SOURCE_ID, { type: "geojson", data: fcRef.current as any });
+
+        map.addLayer({
+            id: LAYER_POLY,
+            type: "fill",
+            source: SOURCE_ID,
+            filter: ["any", ["==", ["geometry-type"], "Polygon"], ["==", ["geometry-type"], "MultiPolygon"]],
+            paint: { "fill-color": "#e8f5e9", "fill-opacity": 0.15 },
+        });
+        map.addLayer({
+            id: `${LAYER_POLY}-outline`,
+            type: "line",
+            source: SOURCE_ID,
+            filter: ["any", ["==", ["geometry-type"], "Polygon"], ["==", ["geometry-type"], "MultiPolygon"]],
+            paint: { "line-color": "#2e7d32", "line-width": 1.2 },
+        });
+        map.addLayer({
+            id: LAYER_POINT,
+            type: "circle",
+            source: SOURCE_ID,
+            filter: ["==", ["geometry-type"], "Point"],
+            paint: {
+                "circle-radius": 5,
+                "circle-color": "#2e7d32",
+                "circle-opacity": 0.7,
+                "circle-stroke-width": 1,
+                "circle-stroke-color": "#FFFFFF",
+            },
+        });
+
+        // --- ADMIN BOUNDARIES ---
+        map.addSource(ADMIN_SOURCE_ID, { type: "geojson", data: adminFcRef.current as any });
+        map.addLayer({
+            id: ADMIN_LAYER_LINE,
+            type: "line",
+            source: ADMIN_SOURCE_ID,
+            paint: { "line-color": "#78909c", "line-width": 1.5, "line-dasharray": [4, 2], "line-opacity": 0.6 },
+        });
+        map.addLayer({
+            id: ADMIN_LAYER_LABEL,
+            type: "symbol",
+            source: ADMIN_SOURCE_ID,
+            layout: { "text-field": ["get", "name"], "text-size": 14, "text-anchor": "center", "text-allow-overlap": false },
+            paint: { "text-color": "#546e7a", "text-halo-color": "#FFFFFF", "text-halo-width": 1.5 },
+        });
+
+        // --- ZONES ---
+        map.addSource(ZONE_SOURCE_ID, { type: "geojson", data: zonesFcRef.current as any });
+        map.addLayer({
+            id: ZONE_LAYER_FILL,
+            type: "fill",
+            source: ZONE_SOURCE_ID,
+            filter: ["any", ["==", ["geometry-type"], "Polygon"], ["==", ["geometry-type"], "MultiPolygon"]],
+            paint: { "fill-color": "#00695c", "fill-opacity": 0.15 },
+        });
+        map.addLayer({
+            id: ZONE_LAYER_LINE,
+            type: "line",
+            source: ZONE_SOURCE_ID,
+            filter: ["any", ["==", ["geometry-type"], "Polygon"], ["==", ["geometry-type"], "MultiPolygon"]],
+            paint: { "line-color": "#00695c", "line-width": 2.5, "line-opacity": 1 },
+        });
+
+        // --- HIGHLIGHT ---
+        map.addSource(HIGHLIGHT_SOURCE_ID, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({
+            id: HIGHLIGHT_LAYER_LINE,
+            type: "line",
+            source: HIGHLIGHT_SOURCE_ID,
+            paint: { "line-color": "#1565c0", "line-width": 2.5, "line-opacity": 0.9 },
+        });
+    }
+
+    // =====================================================
+    // Map initialization
+    // =====================================================
     useEffect(() => {
         if (!mapDivRef.current) return;
         if (mapRef.current) return;
 
         const map = new maplibregl.Map({
             container: mapDivRef.current,
-            style: `https://api.maptiler.com/maps/hybrid/style.json?key=tB2L6SKHHpGhLq5rCbBD`,
+            style: STYLE_URLS[mapStyle],
             center: [initial.lng, initial.lat],
             zoom: initial.zoom,
         });
@@ -180,290 +240,13 @@ export default function BuildingsMap() {
         mapRef.current = map;
 
         map.on("load", () => {
-            // =========================
-            // BUILDINGS SOURCE + LAYERS
-            // =========================
-            map.addSource(SOURCE_ID, {
-                type: "geojson",
-                data: fc as any,
-            });
-
-            map.addLayer({
-                id: LAYER_POLY,
-                type: "fill",
-                source: SOURCE_ID,
-                filter: [
-                    "any",
-                    ["==", ["geometry-type"], "Polygon"],
-                    ["==", ["geometry-type"], "MultiPolygon"],
-                ],
-                paint: {
-                    "fill-color": "#FFD700",
-                    "fill-opacity": 0.6,
-                },
-            });
-
-            map.addLayer({
-                id: `${LAYER_POLY}-outline`,
-                type: "line",
-                source: SOURCE_ID,
-                filter: [
-                    "any",
-                    ["==", ["geometry-type"], "Polygon"],
-                    ["==", ["geometry-type"], "MultiPolygon"],
-                ],
-                paint: {
-                    "line-color": "#FF4500",
-                    "line-width": 4,
-                },
-            });
-
-            map.addLayer({
-                id: LAYER_POINT,
-                type: "circle",
-                source: SOURCE_ID,
-                filter: ["==", ["geometry-type"], "Point"],
-                paint: {
-                    "circle-radius": 10,
-                    "circle-color": "#FF6B00",
-                    "circle-opacity": 0.95,
-                    "circle-stroke-width": 3,
-                    "circle-stroke-color": "#FFFFFF",
-                },
-            });
-
-            // ======================
-            // ADMIN BOUNDARIES (arrondissements)
-            // ======================
-            map.addSource(ADMIN_SOURCE_ID, {
-                type: "geojson",
-                data: adminFc as any,
-            });
-
-            map.addLayer({
-                id: ADMIN_LAYER_LINE,
-                type: "line",
-                source: ADMIN_SOURCE_ID,
-                paint: {
-                    "line-color": "#FF00FF",
-                    "line-width": 3,
-                    "line-dasharray": [4, 2],
-                    "line-opacity": 0.8,
-                },
-            });
-
-            map.addLayer({
-                id: ADMIN_LAYER_LABEL,
-                type: "symbol",
-                source: ADMIN_SOURCE_ID,
-                layout: {
-                    "text-field": ["get", "name"],
-                    "text-size": 14,
-                    "text-anchor": "center",
-                    "text-allow-overlap": false,
-                },
-                paint: {
-                    "text-color": "#FF00FF",
-                    "text-halo-color": "#FFFFFF",
-                    "text-halo-width": 2,
-                },
-            });
-
-            // ======================
-            // LAND USE SOURCE + LAYERS (city-wide)
-            // ======================
-            map.addSource(LANDUSE_SOURCE_ID, {
-                type: "geojson",
-                data: landUseFc as any,
-            });
-
-            map.addLayer({
-                id: LANDUSE_LAYER_FILL,
-                type: "fill",
-                source: LANDUSE_SOURCE_ID,
-                filter: [
-                    "any",
-                    ["==", ["geometry-type"], "Polygon"],
-                    ["==", ["geometry-type"], "MultiPolygon"],
-                ],
-                paint: {
-                    "fill-color": [
-                        "match",
-                        ["get", "affectationEn"],
-                        "Residential", LANDUSE_COLORS["Residential"],
-                        "Mixed Use", LANDUSE_COLORS["Mixed Use"],
-                        "Industrial", LANDUSE_COLORS["Industrial"],
-                        "Parks & Recreation", LANDUSE_COLORS["Parks & Recreation"],
-                        "Conservation", LANDUSE_COLORS["Conservation"],
-                        "Downtown Core", LANDUSE_COLORS["Downtown Core"],
-                        "Public Infrastructure", LANDUSE_COLORS["Public Infrastructure"],
-                        "Agricultural", LANDUSE_COLORS["Agricultural"],
-                        "#808080" // default gray
-                    ],
-                    "fill-opacity": 0.35,
-                },
-            });
-
-            map.addLayer({
-                id: LANDUSE_LAYER_LINE,
-                type: "line",
-                source: LANDUSE_SOURCE_ID,
-                filter: [
-                    "any",
-                    ["==", ["geometry-type"], "Polygon"],
-                    ["==", ["geometry-type"], "MultiPolygon"],
-                ],
-                paint: {
-                    "line-color": "#0066FF",
-                    "line-width": 2,
-                    "line-opacity": 0.8,
-                },
-            });
-
-            // ======================
-            // ZONES SOURCE + LAYERS
-            // ======================
-            map.addSource(ZONE_SOURCE_ID, {
-                type: "geojson",
-                data: zonesFc as any,
-            });
-
-            map.addLayer({
-                id: ZONE_LAYER_FILL,
-                type: "fill",
-                source: ZONE_SOURCE_ID,
-                filter: [
-                    "any",
-                    ["==", ["geometry-type"], "Polygon"],
-                    ["==", ["geometry-type"], "MultiPolygon"],
-                ],
-                paint: {
-                    "fill-color": "#006666",
-                    "fill-opacity": 0.35,
-                },
-            });
-
-            map.addLayer({
-                id: ZONE_LAYER_LINE,
-                type: "line",
-                source: ZONE_SOURCE_ID,
-                filter: [
-                    "any",
-                    ["==", ["geometry-type"], "Polygon"],
-                    ["==", ["geometry-type"], "MultiPolygon"],
-                ],
-                paint: {
-                    "line-color": "#004444",
-                    "line-width": 2,
-                },
-            });
-
-            // ======================
-            // HIGHLIGHT LAYER (for selected features)
-            // ======================
-            map.addSource(HIGHLIGHT_SOURCE_ID, {
-                type: "geojson",
-                data: { type: "FeatureCollection", features: [] },
-            });
-
-            map.addLayer({
-                id: HIGHLIGHT_LAYER_LINE,
-                type: "line",
-                source: HIGHLIGHT_SOURCE_ID,
-                paint: {
-                    "line-color": "#FF0000",
-                    "line-width": 5,
-                    "line-opacity": 1,
-                },
-            });
-
-            // Click handler — opens sidebar instead of popup
-            map.on("click", (e) => {
-                const highlightFeature = (geometry: any) => {
-                    const highlightSrc = map.getSource(HIGHLIGHT_SOURCE_ID) as maplibregl.GeoJSONSource;
-                    if (highlightSrc && geometry) {
-                        highlightSrc.setData({
-                            type: "FeatureCollection",
-                            features: [{
-                                type: "Feature",
-                                properties: {},
-                                geometry: JSON.parse(JSON.stringify(geometry)),
-                            }],
-                        });
-                    }
-                };
-
-                // First check for building features
-                const buildingFeats = map.queryRenderedFeatures(e.point, {
-                    layers: [LAYER_POLY, `${LAYER_POLY}-outline`, LAYER_POINT],
-                });
-
-                if (buildingFeats.length > 0) {
-                    const poly = buildingFeats.find(
-                        (f: any) => f.geometry?.type === "Polygon" || f.geometry?.type === "MultiPolygon"
-                    );
-                    const point = buildingFeats.find((f: any) => f.geometry?.type === "Point");
-                    const f: any = poly ?? point;
-                    if (!f) return;
-
-                    const lngLat =
-                        f.geometry?.type === "Point" && Array.isArray(f.geometry.coordinates)
-                            ? { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
-                            : { lng: e.lngLat.lng, lat: e.lngLat.lat };
-
-                    highlightFeature(f.geometry);
-                    setSelectedFeatureId(f.id);
-                    setSidebarSelection({
-                        type: "building",
-                        properties: f.properties || {},
-                        geometry: f.geometry,
-                        lngLat,
-                    });
-                    return;
-                }
-
-                // Check for zone features
-                const zoneFeats = map.queryRenderedFeatures(e.point, {
-                    layers: [ZONE_LAYER_FILL, ZONE_LAYER_LINE],
-                });
-
-                if (zoneFeats.length > 0) {
-                    const zoneFeature: any = zoneFeats[0];
-                    highlightFeature(zoneFeature.geometry);
-                    setSelectedFeatureId(zoneFeature.id);
-                    setSidebarSelection({
-                        type: "zone",
-                        properties: zoneFeature.properties || {},
-                        geometry: zoneFeature.geometry,
-                    });
-                    return;
-                }
-
-                // Check for land use features (lowest priority, only if enabled)
-                if (ENABLE_LAND_USE_LAYER) {
-                    const landUseFeats = map.queryRenderedFeatures(e.point, {
-                        layers: [LANDUSE_LAYER_FILL],
-                    });
-
-                    if (landUseFeats.length > 0) {
-                        const feature: any = landUseFeats[0];
-                        highlightFeature(feature.geometry);
-                        setSelectedFeatureId(feature.id);
-                        setSidebarSelection({
-                            type: "landuse",
-                            properties: feature.properties || {},
-                            geometry: feature.geometry,
-                        });
-                        return;
-                    }
-                }
-
-                // Clicked on empty space — close sidebar + clear highlight
-                closeSidebar();
-            });
+            addAllSourcesAndLayers(map);
+            registerClickHandler(map);
+            registerHoverHandlers(map);
 
             mapReadyRef.current = true;
-            runSearchFromCurrentBbox();
+            loadZonage();
+            loadViewportLayers();
         });
 
         return () => {
@@ -473,150 +256,292 @@ export default function BuildingsMap() {
         };
     }, [initial]);
 
-    // Update buildings source when fc changes
+    // Click handler — extracted so it can be re-registered after style change
+    function registerClickHandler(map: maplibregl.Map) {
+        map.on("click", (e) => {
+            const highlightFeature = (geometry: any) => {
+                const highlightSrc = map.getSource(HIGHLIGHT_SOURCE_ID) as maplibregl.GeoJSONSource;
+                if (highlightSrc && geometry) {
+                    highlightSrc.setData({
+                        type: "FeatureCollection",
+                        features: [{ type: "Feature", properties: {}, geometry: JSON.parse(JSON.stringify(geometry)) }],
+                    });
+                }
+            };
+
+            const buildingFeats = map.queryRenderedFeatures(e.point, {
+                layers: [LAYER_POLY, `${LAYER_POLY}-outline`, LAYER_POINT],
+            });
+
+            if (buildingFeats.length > 0) {
+                const poly = buildingFeats.find(
+                    (f: any) => f.geometry?.type === "Polygon" || f.geometry?.type === "MultiPolygon"
+                );
+                const point = buildingFeats.find((f: any) => f.geometry?.type === "Point");
+                const f: any = poly ?? point;
+                if (!f) return;
+
+                const lngLat =
+                    f.geometry?.type === "Point" && Array.isArray(f.geometry.coordinates)
+                        ? { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
+                        : { lng: e.lngLat.lng, lat: e.lngLat.lat };
+
+                highlightFeature(f.geometry);
+                setSelectedFeatureId(f.id);
+                setSidebarSelection({ type: "building", properties: f.properties || {}, geometry: f.geometry, lngLat });
+                return;
+            }
+
+            const zoneFeats = map.queryRenderedFeatures(e.point, {
+                layers: [ZONE_LAYER_FILL, ZONE_LAYER_LINE],
+            });
+
+            if (zoneFeats.length > 0) {
+                const zoneFeature: any = zoneFeats[0];
+                highlightFeature(zoneFeature.geometry);
+                setSelectedFeatureId(zoneFeature.id);
+                setSidebarSelection({ type: "zone", properties: zoneFeature.properties || {}, geometry: zoneFeature.geometry });
+                return;
+            }
+
+            closeSidebar();
+        });
+    }
+
+    function registerHoverHandlers(map: maplibregl.Map) {
+        map.on("mouseenter", LAYER_POLY, () => {
+            map.getCanvas().style.cursor = "pointer";
+            map.setPaintProperty(LAYER_POLY, "fill-opacity", 0.35);
+        });
+        map.on("mouseleave", LAYER_POLY, () => {
+            map.getCanvas().style.cursor = "";
+            map.setPaintProperty(LAYER_POLY, "fill-opacity", 0.15);
+        });
+        map.on("mouseenter", ZONE_LAYER_FILL, () => {
+            map.getCanvas().style.cursor = "pointer";
+            map.setPaintProperty(ZONE_LAYER_FILL, "fill-opacity", 0.25);
+        });
+        map.on("mouseleave", ZONE_LAYER_FILL, () => {
+            map.getCanvas().style.cursor = "";
+            map.setPaintProperty(ZONE_LAYER_FILL, "fill-opacity", 0.15);
+        });
+    }
+
+    // =====================================================
+    // Sync GeoJSON sources when state changes
+    // =====================================================
     useEffect(() => {
         const map = mapRef.current;
         if (!map) return;
         const src = map.getSource(SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-        if (!src) return;
-        src.setData(fc as any);
+        if (src) src.setData(fc as any);
     }, [fc]);
 
-    // Update zones source when zonesFc changes
-    useEffect(() => {
-        const map = mapRef.current;
-        if (!map) return;
-        const src = map.getSource(ZONE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-        if (!src) return;
-        src.setData(zonesFc as any);
-    }, [zonesFc]);
+    // zonesFc and adminBoundariesFc are synced via their filtered display effects below
 
-    // Update land use source when landUseFc changes
+    // =====================================================
+    // Load admin boundaries + arrondissement refs on mount
+    // =====================================================
     useEffect(() => {
-        const map = mapRef.current;
-        if (!map) return;
-        const src = map.getSource(LANDUSE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-        if (!src) return;
-        src.setData(landUseFc as any);
-    }, [landUseFc]);
-
-    // Update admin boundaries source when adminFc changes
-    useEffect(() => {
-        const map = mapRef.current;
-        if (!map) return;
-        const src = map.getSource(ADMIN_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-        if (!src) return;
-        src.setData(adminFc as any);
-    }, [adminFc]);
-
-    // Load admin boundaries once on mount (only if enabled)
-    useEffect(() => {
-        if (!ENABLE_ADMIN_BOUNDARIES_LAYER) return;
         fetchAdminBoundariesGeoJson()
-            .then(setAdminFc)
+            .then(setAdminBoundariesFc)
             .catch((err) => console.warn("Failed to load admin boundaries:", err));
+        fetchArrondissementRefs()
+            .then((refs) => {
+                refs.sort((a, b) => a.nomOfficiel.localeCompare(b.nomOfficiel));
+                setArrondissementRefs(refs);
+            })
+            .catch((err) => console.warn("Failed to load arrondissement refs:", err));
     }, []);
 
-    // Load arrondissements list on mount
-    useEffect(() => {
-        fetchArrondissements()
-            .then(setAvailableArrondissements)
-            .catch((err) => console.warn("Failed to load arrondissements:", err));
-    }, []);
+    // =====================================================
+    // Zonage loading (full Montreal bbox, loaded once)
+    // =====================================================
+    const zonageLoadedRef = useRef(false);
+    async function loadZonage() {
+        const params: SearchParams = {
+            minLng: -73.98,
+            minLat: 45.40,
+            maxLng: -73.47,
+            maxLat: 45.70,
+        };
+        try {
+            const zones = await fetchZonesGeoJson(params);
+            setZonesFc(zones);
+            zonageLoadedRef.current = true;
+        } catch (e: any) {
+            console.error("Failed to load zonage:", e);
+        }
+    }
 
-    // Toggle layer visibility
-    useEffect(() => {
-        const map = mapRef.current;
-        if (!map || !map.getLayer(LANDUSE_LAYER_FILL)) return;
-        map.setLayoutProperty(LANDUSE_LAYER_FILL, "visibility", showLandUse ? "visible" : "none");
-        map.setLayoutProperty(LANDUSE_LAYER_LINE, "visibility", showLandUse ? "visible" : "none");
-    }, [showLandUse]);
-
-    useEffect(() => {
-        const map = mapRef.current;
-        if (!map || !map.getLayer(ZONE_LAYER_FILL)) return;
-        map.setLayoutProperty(ZONE_LAYER_FILL, "visibility", showZonage ? "visible" : "none");
-        map.setLayoutProperty(ZONE_LAYER_LINE, "visibility", showZonage ? "visible" : "none");
-    }, [showZonage]);
-
-    useEffect(() => {
-        const map = mapRef.current;
-        if (!map || !map.getLayer(LAYER_POLY)) return;
-        map.setLayoutProperty(LAYER_POLY, "visibility", showBuildings ? "visible" : "none");
-        map.setLayoutProperty(`${LAYER_POLY}-outline`, "visibility", showBuildings ? "visible" : "none");
-        map.setLayoutProperty(LAYER_POINT, "visibility", showBuildings ? "visible" : "none");
-    }, [showBuildings]);
-
-    useEffect(() => {
-        const map = mapRef.current;
-        if (!map || !map.getLayer(ADMIN_LAYER_LINE)) return;
-        map.setLayoutProperty(ADMIN_LAYER_LINE, "visibility", showAdminBoundaries ? "visible" : "none");
-        map.setLayoutProperty(ADMIN_LAYER_LABEL, "visibility", showAdminBoundaries ? "visible" : "none");
-    }, [showAdminBoundaries]);
-
-    async function runSearchFromCurrentBbox() {
+    // =====================================================
+    // Load buildings based on viewport
+    // =====================================================
+    async function loadViewportLayers() {
         const map = mapRef.current;
         if (!map) return;
 
         const zoom = map.getZoom();
         const b = map.getBounds();
-        const params: SearchParams = {
+        const currentFetchId = ++fetchIdRef.current;
+
+        const viewportParams: SearchParams = {
             minLng: round(b.getWest()),
             minLat: round(b.getSouth()),
             maxLng: round(b.getEast()),
             maxLat: round(b.getNorth()),
-            ...filters,
-            arrondissements: selectedArrondissements.length > 0 ? selectedArrondissements : undefined,
+            borough: selectedArrondissement?.codeRem ?? undefined,
         };
+
+        const shouldLoadBuildings = zoom >= BUILDINGS_ZOOM_THRESHOLD;
 
         setLoading(true);
         setError(null);
 
         try {
-            const bboxParams = {
-                minLng: params.minLng,
-                minLat: params.minLat,
-                maxLng: params.maxLng,
-                maxLat: params.maxLat,
-            };
+            const buildings = shouldLoadBuildings
+                ? await fetchBuildingsGeoJson(viewportParams)
+                : EMPTY_FC;
 
-            // Only load buildings when zoomed in enough (zoom > 13)
-            // Land use and zones load at all zoom levels
-            const buildingsPromise = zoom > 13
-                ? fetchBuildingsGeoJson(params)
-                : Promise.resolve({ type: "FeatureCollection" as const, features: [] });
-
-            const promises: [Promise<FeatureCollection>, Promise<FeatureCollection>, Promise<FeatureCollection>] = [
-                buildingsPromise,
-                fetchZonesGeoJson(params),
-                ENABLE_LAND_USE_LAYER
-                    ? fetchLandUseGeoJson(bboxParams)
-                    : Promise.resolve({ type: "FeatureCollection" as const, features: [] }),
-            ];
-
-            const [buildings, zones, landUse] = await Promise.all(promises);
-
+            if (currentFetchId !== fetchIdRef.current) return;
             setFc(buildings);
-            setZonesFc(zones);
-            if (ENABLE_LAND_USE_LAYER) setLandUseFc(landUse);
         } catch (e: any) {
+            if (currentFetchId !== fetchIdRef.current) return;
             setError(e?.message ?? "Unknown error");
-            setFc({ type: "FeatureCollection", features: [] });
-            setZonesFc({ type: "FeatureCollection", features: [] });
-            setLandUseFc({ type: "FeatureCollection", features: [] });
+            setFc(EMPTY_FC);
         } finally {
-            setLoading(false);
+            if (currentFetchId === fetchIdRef.current) {
+                setLoading(false);
+            }
         }
     }
 
-    // Re-search when arrondissements filter changes
+    // =====================================================
+    // Arrondissement selection handler
+    // =====================================================
+    function handleArrondissementChange(code3l: string) {
+        if (!code3l) {
+            // "All" selected — clear everything
+            setSelectedArrondissement(null);
+            setZoneCodes([]);
+            setSelectedZoneCode(null);
+            // Reset to full Montreal view
+            const map = mapRef.current;
+            if (map) {
+                map.flyTo({ center: [initial.lng, initial.lat], zoom: initial.zoom });
+            }
+            return;
+        }
+
+        const ref = arrondissementRefs.find((r) => r.code3l === code3l);
+        if (!ref) return;
+
+        setSelectedArrondissement(ref);
+        setSelectedZoneCode(null);
+
+        // Fetch zone codes for this arrondissement
+        fetchZoneCodesByArrondissement(ref.code3l)
+            .then(setZoneCodes)
+            .catch((err) => {
+                console.warn("Failed to load zone codes:", err);
+                setZoneCodes([]);
+            });
+
+        // Fly to arrondissement bounds using admin boundary geometry
+        const feature = adminBoundariesFc.features.find(
+            (f) => f.properties?.code_3c === ref.code3l
+        );
+        if (feature && mapRef.current) {
+            const bounds = getBoundsFromGeometry(feature.geometry);
+            if (bounds) {
+                mapRef.current.fitBounds(bounds, { padding: 40 });
+            }
+        }
+    }
+
+    // Trigger reload when arrondissement changes
     useEffect(() => {
         if (!mapReadyRef.current) return;
-        runSearchFromCurrentBbox();
+        loadViewportLayers();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedArrondissements]);
+    }, [selectedArrondissement]);
 
-    // Auto search on move end (debounced-ish)
+    // =====================================================
+    // Zone code selection — client-side filter of zonage
+    // =====================================================
+    const displayedZonesFc = useMemo<FeatureCollection>(() => {
+        let features = zonesFc.features;
+
+        // No arrondissement selected — show all zones
+        if (!selectedArrondissement) return zonesFc;
+
+        // Filter by arrondissement — only show zones whose code is in the fetched set
+        if (zoneCodes.length > 0) {
+            const codeSet = new Set(zoneCodes);
+            features = features.filter((f) => codeSet.has(f.properties?.zoneCode));
+        } else {
+            // Zone codes still loading — show nothing yet
+            features = [];
+        }
+
+        // Further filter by specific zone code
+        if (selectedZoneCode) {
+            features = features.filter((f) => f.properties?.zoneCode === selectedZoneCode);
+        }
+
+        return { type: "FeatureCollection", features };
+    }, [zonesFc, selectedArrondissement, zoneCodes, selectedZoneCode]);
+
+    // Push filtered zones to map source + keep ref in sync for style changes
+    useEffect(() => {
+        zonesFcRef.current = displayedZonesFc;
+        const map = mapRef.current;
+        if (!map) return;
+        const src = map.getSource(ZONE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+        if (src) src.setData(displayedZonesFc as any);
+    }, [displayedZonesFc]);
+
+    // =====================================================
+    // Admin boundaries — filter to selected arrondissement
+    // =====================================================
+    const displayedAdminFc = useMemo<FeatureCollection>(() => {
+        if (!selectedArrondissement) return EMPTY_FC;
+        return {
+            type: "FeatureCollection",
+            features: adminBoundariesFc.features.filter(
+                (f) => f.properties?.code_3c === selectedArrondissement.code3l
+            ),
+        };
+    }, [adminBoundariesFc, selectedArrondissement]);
+
+    // Push filtered admin boundaries to map source + keep ref in sync for style changes
+    useEffect(() => {
+        adminFcRef.current = displayedAdminFc;
+        const map = mapRef.current;
+        if (!map) return;
+        const src = map.getSource(ADMIN_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+        if (src) src.setData(displayedAdminFc as any);
+    }, [displayedAdminFc]);
+
+    // =====================================================
+    // Map style switching
+    // =====================================================
+    function handleMapStyleChange(style: MapStyle) {
+        setMapStyle(style);
+        const map = mapRef.current;
+        if (!map) return;
+
+        map.setStyle(STYLE_URLS[style]);
+        map.once("style.load", () => {
+            addAllSourcesAndLayers(map);
+            registerClickHandler(map);
+            registerHoverHandlers(map);
+        });
+    }
+
+    // =====================================================
+    // Auto-reload on viewport move (debounced)
+    // =====================================================
     useEffect(() => {
         const map = mapRef.current;
         if (!map) return;
@@ -624,7 +549,7 @@ export default function BuildingsMap() {
         let t: any;
         const handler = () => {
             clearTimeout(t);
-            t = setTimeout(() => runSearchFromCurrentBbox(), 400);
+            t = setTimeout(() => loadViewportLayers(), 400);
         };
 
         map.on("moveend", handler);
@@ -633,237 +558,100 @@ export default function BuildingsMap() {
             map.off("moveend", handler);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [filters, selectedArrondissements]);
+    }, [selectedArrondissement]);
 
+    // =====================================================
+    // Render
+    // =====================================================
     return (
-        <div className="grid grid-cols-[320px_1fr] h-[calc(100vh-16px)] gap-3 p-2">
-            {/* Left sidebar */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-y-auto flex flex-col">
-                {/* Search Filters header */}
-                <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-gray-200 shrink-0">
-                    <h2 className="text-base font-bold text-gray-900">Search Filters</h2>
-                    <button
-                        onClick={runSearchFromCurrentBbox}
-                        className="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                        Search
-                    </button>
+        <div className="grid grid-cols-[280px_1fr] h-[calc(100vh-16px)] gap-3 p-2">
+            {/* Left panel */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col">
+                {/* Title */}
+                <div className="px-4 py-4 border-b border-gray-200 shrink-0">
+                    <h1 className="text-lg font-bold text-gray-900">Montreal Map</h1>
                 </div>
 
-                {/* Filter inputs */}
-                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-                    <div className="space-y-3">
-                        <label className="block">
-                            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                Neighborhood
-                            </span>
-                            <input
-                                value={filters.neighborhood ?? ""}
-                                onChange={(e) => setFilters((p) => ({ ...p, neighborhood: e.target.value || undefined }))}
-                                className="mt-1 w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 transition-colors"
-                                placeholder="Ville-Marie"
-                            />
-                        </label>
-
-                        <label className="block">
-                            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                Building Type
-                            </span>
-                            <input
-                                value={filters.buildingType ?? ""}
-                                onChange={(e) => setFilters((p) => ({ ...p, buildingType: e.target.value || undefined }))}
-                                className="mt-1 w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 transition-colors"
-                                placeholder="Residential"
-                            />
-                        </label>
-
-                        <div className="grid grid-cols-2 gap-3">
-                            <label className="block">
-                                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                    Min Year
-                                </span>
-                                <input
-                                    type="number"
-                                    value={filters.minYearBuilt ?? ""}
-                                    onChange={(e) =>
-                                        setFilters((p) => ({
-                                            ...p,
-                                            minYearBuilt: e.target.value ? Number(e.target.value) : undefined,
-                                        }))
-                                    }
-                                    className="mt-1 w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 transition-colors"
-                                />
-                            </label>
-                            <label className="block">
-                                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                    Max Year
-                                </span>
-                                <input
-                                    type="number"
-                                    value={filters.maxYearBuilt ?? ""}
-                                    onChange={(e) =>
-                                        setFilters((p) => ({
-                                            ...p,
-                                            maxYearBuilt: e.target.value ? Number(e.target.value) : undefined,
-                                        }))
-                                    }
-                                    className="mt-1 w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 transition-colors"
-                                />
-                            </label>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                            <label className="block">
-                                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                    Min Floors
-                                </span>
-                                <input
-                                    type="number"
-                                    value={filters.minFloors ?? ""}
-                                    onChange={(e) =>
-                                        setFilters((p) => ({
-                                            ...p,
-                                            minFloors: e.target.value ? Number(e.target.value) : undefined,
-                                        }))
-                                    }
-                                    className="mt-1 w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 transition-colors"
-                                />
-                            </label>
-                            <label className="block">
-                                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                    Max Floors
-                                </span>
-                                <input
-                                    type="number"
-                                    value={filters.maxFloors ?? ""}
-                                    onChange={(e) =>
-                                        setFilters((p) => ({
-                                            ...p,
-                                            maxFloors: e.target.value ? Number(e.target.value) : undefined,
-                                        }))
-                                    }
-                                    className="mt-1 w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 transition-colors"
-                                />
-                            </label>
-                        </div>
-
-                        <button
-                            onClick={() => setFilters({})}
-                            className="w-full py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                {/* Dropdowns */}
+                <div className="flex-1 px-4 py-4 space-y-5">
+                    {/* Arrondissement select */}
+                    <label className="block">
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            Arrondissement
+                        </span>
+                        <select
+                            value={selectedArrondissement?.code3l ?? ""}
+                            onChange={(e) => handleArrondissementChange(e.target.value)}
+                            className="mt-1 w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                         >
-                            Clear Filters
-                        </button>
-                    </div>
+                            <option value="">All</option>
+                            {arrondissementRefs.map((ref) => (
+                                <option key={ref.code3l} value={ref.code3l}>
+                                    {ref.nomOfficiel}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
 
-                    {/* Layers section */}
-                    <div className="border-t border-gray-200 pt-4">
-                        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                            Layers
-                        </h3>
-                        <div className="space-y-2.5">
-                            <label className="flex items-center gap-2.5 cursor-pointer group">
-                                <input
-                                    type="checkbox"
-                                    checked={showBuildings}
-                                    onChange={(e) => setShowBuildings(e.target.checked)}
-                                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                />
-                                <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: "#FFD700" }} />
-                                <span className="text-sm text-gray-700 group-hover:text-gray-900">Buildings</span>
-                            </label>
-                            <label className="flex items-center gap-2.5 cursor-pointer group">
-                                <input
-                                    type="checkbox"
-                                    checked={showZonage}
-                                    onChange={(e) => setShowZonage(e.target.checked)}
-                                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                />
-                                <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: "#006666" }} />
-                                <span className="text-sm text-gray-700 group-hover:text-gray-900">Zonage (Rosemont)</span>
-                            </label>
-                            {ENABLE_LAND_USE_LAYER && (
-                                <label className="flex items-center gap-2.5 cursor-pointer group">
-                                    <input
-                                        type="checkbox"
-                                        checked={showLandUse}
-                                        onChange={(e) => setShowLandUse(e.target.checked)}
-                                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                    />
-                                    <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: "#90EE90" }} />
-                                    <span className="text-sm text-gray-700 group-hover:text-gray-900">Land Use</span>
-                                </label>
-                            )}
-                            {ENABLE_ADMIN_BOUNDARIES_LAYER && (
-                                <label className="flex items-center gap-2.5 cursor-pointer group">
-                                    <input
-                                        type="checkbox"
-                                        checked={showAdminBoundaries}
-                                        onChange={(e) => setShowAdminBoundaries(e.target.checked)}
-                                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                    />
-                                    <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: "#FF00FF" }} />
-                                    <span className="text-sm text-gray-700 group-hover:text-gray-900">Admin Boundaries</span>
-                                </label>
-                            )}
-                        </div>
-                    </div>
+                    {/* Zonage select */}
+                    <label className="block">
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            Zonage
+                        </span>
+                        <select
+                            value={selectedZoneCode ?? ""}
+                            onChange={(e) => setSelectedZoneCode(e.target.value || null)}
+                            disabled={!selectedArrondissement}
+                            className={[
+                                "mt-1 w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors",
+                                selectedArrondissement
+                                    ? "text-gray-900 bg-white border-gray-300"
+                                    : "text-gray-400 bg-gray-50 border-gray-200 cursor-not-allowed",
+                            ].join(" ")}
+                        >
+                            <option value="">All zones</option>
+                            {zoneCodes.map((code) => (
+                                <option key={code} value={code}>
+                                    {code}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
 
-                    {/* Zonage (Arrondissement) filter section */}
-                    {availableArrondissements.length > 0 && (
-                        <div className="border-t border-gray-200 pt-4">
-                            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                                Zonage
-                            </h3>
-                            <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                                {availableArrondissements.map((arr) => (
-                                    <label key={arr} className="flex items-center gap-2.5 cursor-pointer group">
-                                        <input
-                                            type="checkbox"
-                                            checked={selectedArrondissements.includes(arr)}
-                                            onChange={(e) => {
-                                                setSelectedArrondissements((prev) =>
-                                                    e.target.checked
-                                                        ? [...prev, arr]
-                                                        : prev.filter((a) => a !== arr)
-                                                );
-                                            }}
-                                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                        />
-                                        <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: "#006666" }} />
-                                        <span className="text-sm text-gray-700 group-hover:text-gray-900 truncate">{arr}</span>
-                                    </label>
-                                ))}
-                            </div>
-                            {selectedArrondissements.length > 0 && (
-                                <button
-                                    onClick={() => setSelectedArrondissements([])}
-                                    className="mt-2 w-full py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                                >
-                                    Clear Arrondissements
-                                </button>
-                            )}
-                        </div>
-                    )}
+                    {/* Map style select */}
+                    <label className="block">
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            Map Style
+                        </span>
+                        <select
+                            value={mapStyle}
+                            onChange={(e) => handleMapStyleChange(e.target.value as MapStyle)}
+                            className="mt-1 w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                        >
+                            <option value="positron">Positron</option>
+                            <option value="hybrid">Hybrid</option>
+                            <option value="streets">Streets</option>
+                        </select>
+                    </label>
+                </div>
 
-                    {/* Stats footer */}
-                    <div className="border-t border-gray-200 pt-3">
-                        <p className="text-xs text-gray-500">
-                            {loading
-                                ? "Loading..."
-                                : `Buildings: ${fc.features.length} | Zones: ${zonesFc.features.length}${ENABLE_LAND_USE_LAYER ? ` | Land Use: ${landUseFc.features.length}` : ""}`}
+                {/* Stats footer */}
+                <div className="px-4 py-3 border-t border-gray-200 shrink-0">
+                    <p className="text-xs text-gray-500">
+                        {loading
+                            ? "Loading..."
+                            : `Buildings: ${fc.features.length} | Zones: ${displayedZonesFc.features.length}`}
+                    </p>
+                    {fc.features.length === 0 && !loading && (
+                        <p className="text-xs text-gray-400 mt-1">
+                            {mapRef.current && mapRef.current.getZoom() < BUILDINGS_ZOOM_THRESHOLD
+                                ? "Zoom in to see buildings"
+                                : "No buildings in current view"}
                         </p>
-                        {selectedArrondissements.length > 0 && (
-                            <p className="text-xs text-gray-500 mt-1">
-                                Filtered by: {selectedArrondissements.length} arrondissement{selectedArrondissements.length > 1 ? "s" : ""}
-                            </p>
-                        )}
-                        {fc.features.length === 0 && !loading && (
-                            <p className="text-xs text-gray-400 mt-1">Zoom in to see buildings</p>
-                        )}
-                        {error && (
-                            <p className="text-xs text-red-600 mt-1">Error: {error}</p>
-                        )}
-                    </div>
+                    )}
+                    {error && (
+                        <p className="text-xs text-red-600 mt-1">Error: {error}</p>
+                    )}
                 </div>
             </div>
 
@@ -880,4 +668,38 @@ export default function BuildingsMap() {
             </div>
         </div>
     );
+}
+
+// Helper: compute LngLatBounds from a GeoJSON geometry
+function getBoundsFromGeometry(
+    geometry: any
+): [[number, number], [number, number]] | null {
+    const coords: number[][] = [];
+
+    function collectCoords(obj: any) {
+        if (Array.isArray(obj) && typeof obj[0] === "number") {
+            coords.push(obj as number[]);
+        } else if (Array.isArray(obj)) {
+            for (const item of obj) collectCoords(item);
+        }
+    }
+
+    collectCoords(geometry.coordinates);
+    if (coords.length === 0) return null;
+
+    let minLng = Infinity,
+        minLat = Infinity,
+        maxLng = -Infinity,
+        maxLat = -Infinity;
+    for (const [lng, lat] of coords) {
+        if (lng < minLng) minLng = lng;
+        if (lng > maxLng) maxLng = lng;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+    }
+
+    return [
+        [minLng, minLat],
+        [maxLng, maxLat],
+    ];
 }

@@ -129,16 +129,13 @@ public class BuildingServiceImpl implements BuildingService {
 
     @Override
     public GeoJson.FeatureCollection searchGeoJsonPolygons(BuildingSearchRequest req) {
-        // Get property assessment data (has year, floors, address, type)
-        List<String> arrondissements = req.arrondissements();
-        boolean hasArrondissements = arrondissements != null && !arrondissements.isEmpty();
+        String borough = req.borough();
+        boolean hasBorough = borough != null && !borough.isBlank();
 
-        List<PropertyAssessment> properties = hasArrondissements
-                ? propertyAssessmentRepository.searchInBboxByArrondissements(
+        List<PropertyAssessment> properties = hasBorough
+                ? propertyAssessmentRepository.searchInBboxByBorough(
                         req.minLng(), req.minLat(), req.maxLng(), req.maxLat(),
-                        req.minYearBuilt(), req.maxYearBuilt(),
-                        req.minFloors(), req.maxFloors(),
-                        arrondissements)
+                        borough)
                 : propertyAssessmentRepository.searchInBbox(
                         req.minLng(), req.minLat(), req.maxLng(), req.maxLat(),
                         req.minYearBuilt(), req.maxYearBuilt(),
@@ -158,6 +155,7 @@ public class BuildingServiceImpl implements BuildingService {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("address", p.getFullAddress());
         props.put("neighborhood", p.getBorough());
+        props.put("matricule", p.getMatricule());
         props.put("yearBuilt", p.getYearBuilt());
         props.put("floors", p.getFloors());
         props.put("buildingType", p.getUsageLabel());

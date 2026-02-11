@@ -9,4 +9,5 @@ public interface ZonageService {
     ZonageResponse getAtPoint(double lng, double lat);
     GeoJson.FeatureCollection searchGeoJson(double minLng, double minLat, double maxLng, double maxLat);
     List<String> getArrondissements();
+    List<String> getZoneCodesByArrondissement(String code3l);
 }

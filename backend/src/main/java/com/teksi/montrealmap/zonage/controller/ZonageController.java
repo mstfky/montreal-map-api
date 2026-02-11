@@ -37,4 +37,9 @@ public class ZonageController {
     public List<String> getArrondissements() {
         return zonageService.getArrondissements();
     }
+
+    @GetMapping("/zone-codes")
+    public List<String> getZoneCodesByArrondissement(@RequestParam String code3l) {
+        return zonageService.getZoneCodesByArrondissement(code3l);
+    }
 }

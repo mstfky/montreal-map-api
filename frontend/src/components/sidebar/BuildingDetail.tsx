@@ -34,6 +34,9 @@ export default function BuildingDetail({
                     <dt className="text-gray-400">Neighborhood</dt>
                     <dd>{fmt(p.neighborhood)}</dd>
 
+                    <dt className="text-gray-400">Matricule</dt>
+                    <dd>{fmt(p.matricule)}</dd>
+
                     <dt className="text-gray-400">Type</dt>
                     <dd>{fmt(p.buildingType)}</dd>
 

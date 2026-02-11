@@ -21,7 +21,7 @@ public interface PropertyAssessmentRepository extends JpaRepository<PropertyAsse
               and (:minFloors is null or p.floors >= :minFloors)
               and (:maxFloors is null or p.floors <= :maxFloors)
             order by p.buildingArea desc
-            limit 2000
+            limit 5000
             """)
     List<PropertyAssessment> searchInBbox(
             @Param("minLng") double minLng,
@@ -35,28 +35,19 @@ public interface PropertyAssessmentRepository extends JpaRepository<PropertyAsse
     );
 
     @Query(value = """
-            SELECT DISTINCT p.*
+            SELECT p.*
             FROM property_assessment p
-            INNER JOIN zonage z ON z.arrondissement IN (:arrondissements)
-                AND ST_Intersects(p.geom, z.geom)
             WHERE p.geom IS NOT NULL
+              AND p.borough = :codeRem
               AND ST_Intersects(p.geom, ST_MakeEnvelope(:minLng, :minLat, :maxLng, :maxLat, 4326))
-              AND (:minYearBuilt IS NULL OR p.year_built >= :minYearBuilt)
-              AND (:maxYearBuilt IS NULL OR p.year_built <= :maxYearBuilt)
-              AND (:minFloors IS NULL OR p.floors >= :minFloors)
-              AND (:maxFloors IS NULL OR p.floors <= :maxFloors)
             ORDER BY p.building_area DESC
-            LIMIT 2000
+            LIMIT 5000
             """, nativeQuery = true)
-    List<PropertyAssessment> searchInBboxByArrondissements(
+    List<PropertyAssessment> searchInBboxByBorough(
             @Param("minLng") double minLng,
             @Param("minLat") double minLat,
             @Param("maxLng") double maxLng,
             @Param("maxLat") double maxLat,
-            @Param("minYearBuilt") Integer minYearBuilt,
-            @Param("maxYearBuilt") Integer maxYearBuilt,
-            @Param("minFloors") Integer minFloors,
-            @Param("maxFloors") Integer maxFloors,
-            @Param("arrondissements") List<String> arrondissements
+            @Param("codeRem") String codeRem
     );
 }

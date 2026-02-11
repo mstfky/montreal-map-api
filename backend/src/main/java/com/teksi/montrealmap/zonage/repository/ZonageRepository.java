@@ -44,5 +44,14 @@ public interface ZonageRepository extends JpaRepository<Zonage, Long> {
         """, nativeQuery = true)
     List<String> findDistinctArrondissements();
 
+    @Query(value = """
+        SELECT DISTINCT z.zone_code
+        FROM zonage z
+        INNER JOIN admin_boundaries ab ON ST_Intersects(z.geom, ab.geom)
+        WHERE ab.code_3c = :code3l
+        ORDER BY z.zone_code
+        """, nativeQuery = true)
+    List<String> findZoneCodesByArrondissement(@Param("code3l") String code3l);
+
 }
 

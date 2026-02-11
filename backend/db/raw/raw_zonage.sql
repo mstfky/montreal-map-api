@@ -1,9 +1,9 @@
 SET standard_conforming_strings = ON;
-CREATE SCHEMA "raw";
+CREATE SCHEMA IF NOT EXISTS "raw";
 DROP TABLE IF EXISTS "raw"."raw_zonage" CASCADE;
 BEGIN;
 CREATE TABLE "raw"."raw_zonage"();
-ALTER TABLE "raw"."raw_zonage" ADD COLUMN "ogc_fid" SERIAL CONSTRAINT "raw_zonage_pk" PRIMARY KEY;
+ALTER TABLE "raw"."raw_zonage" ADD COLUMN "ogc_fid" BIGSERIAL CONSTRAINT "raw_zonage_pk" PRIMARY KEY;
 SELECT AddGeometryColumn('raw','raw_zonage','geom',4326,'MULTIPOLYGON',3);
 ALTER TABLE "raw"."raw_zonage" ADD COLUMN "numero" VARCHAR(8);
 ALTER TABLE "raw"."raw_zonage" ADD COLUMN "arrond" VARCHAR(2);

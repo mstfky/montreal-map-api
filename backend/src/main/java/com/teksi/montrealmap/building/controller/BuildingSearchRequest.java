@@ -1,7 +1,5 @@
 package com.teksi.montrealmap.building.controller;
 
-import java.util.List;
-
 public record BuildingSearchRequest(double minLng,
                                     double minLat,
                                     double maxLng,
@@ -12,4 +10,4 @@ public record BuildingSearchRequest(double minLng,
                                     Integer maxYearBuilt,
                                     Integer minFloors,
                                     Integer maxFloors,
-                                    List<String> arrondissements) {}
+                                    String borough) {}

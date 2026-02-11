@@ -102,6 +102,11 @@ public class ZonageServiceImpl implements ZonageService {
         return zonageRepository.findDistinctArrondissements();
     }
 
+    @Override
+    public List<String> getZoneCodesByArrondissement(String code3l) {
+        return zonageRepository.findZoneCodesByArrondissement(code3l);
+    }
+
     private ZonageResponse toDto(Zonage z) {
         return new ZonageResponse(
                 z.getId(),
